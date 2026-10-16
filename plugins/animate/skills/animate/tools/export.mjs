@@ -3,7 +3,7 @@
 //   frames:   Playwright calls window.renderFrame(i/fps) and saves the canvas as PNG
 //   audio:    window.renderAudioWav() renders the score in an OfflineAudioContext
 //   stems:    window.renderAudioStems() (optional) -> { music: b64wav, sfx: b64wav, ... }
-//   mux:      ffmpeg -> renders/final.mp4
+//   mux:      ffmpeg -> renders/final.mp4 (BT.709 matrix and tags; the later encodes keep them)
 //   captions: TIMELINE.narration (optional) -> renders/narration.srt + renders/final-captions.mp4
 //             (a preview for reading the script against the picture; the real voice-over is added outside)
 //
@@ -169,11 +169,18 @@ if (!flag('no-audio')) {
 await browser.close();
 
 const full = from === 0 && to === meta.frames - 1;
+// RGB to YUV with the BT.709 matrix, and the file tagged so. Without it ffmpeg converts with BT.601 and writes no tags,
+// and players read untagged HD as BT.709: every colour shifts on playback (217,106,68 played as 227,115,65).
+// Recent ffmpeg takes the tags from the frames (setparams); the -color* options tag them on older builds. The encodes
+// made from final.mp4 below (captions, share, the --only-audio remux) decode its tags and keep them.
+const RGB_TO_BT709 = 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709';
+const TAGS_BT709 = ['-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709'];
 if (!flag('no-mux') && !onlyAudio && full) {
   const out = path.join(RENDERS, opt('out', `final${SUFFIX}.mp4`));
   const args = ['-y', '-hide_banner', '-loglevel', 'error',
     '-framerate', String(meta.fps), '-i', path.join(FR, 'f%04d.png'),
     ...(fs.existsSync(wavPath) && !flag('no-audio') ? ['-i', wavPath, '-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-b:a', '192k'] : ['-map', '0:v:0']),
+    '-vf', RGB_TO_BT709, ...TAGS_BT709,
     '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p', '-r', String(meta.fps),
     '-frames:v', String(meta.frames), '-movflags', '+faststart', out];
   const r = spawnSync('ffmpeg', args, { stdio: 'inherit' });
